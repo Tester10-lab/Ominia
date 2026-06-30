@@ -779,6 +779,7 @@ function openModal(dk, eventId) {
   document.getElementById('recurUntilRow').style.display = 'none';
   document.getElementById('timeRow').style.display = 'grid';
   document.getElementById('dupEventBtn').style.display = 'none';
+  document.getElementById('saveAsNewBtn').style.display = 'none';
   document.getElementById('guestChips').innerHTML = '';
   document.getElementById('evGuests').value = '';
   document.getElementById('budgetDisplay').style.display = 'none';
@@ -802,10 +803,12 @@ function openModal(dk, eventId) {
       editingId = ev.id;
       document.getElementById('modalTitle').textContent = 'Edit Event';
       document.getElementById('dupEventBtn').style.display = 'flex';
+      document.getElementById('saveAsNewBtn').style.display = 'inline-flex';
       fillForm(ev);
     }
   } else {
     document.getElementById('modalTitle').textContent = 'New Event';
+    document.getElementById('saveAsNewBtn').style.display = 'none';
     document.getElementById('evDate').value = dk || dateKey(new Date());
   }
 
@@ -1234,20 +1237,28 @@ function initListeners() {
   // Form submit & reset
   document.getElementById('eventForm').addEventListener('submit', handleSubmit);
   document.getElementById('resetForm').addEventListener('click', () => {
-    document.getElementById('eventForm').reset();
-    editingId = null; guestList = [];
-    document.getElementById('modalTitle').textContent = 'New Event';
-    document.getElementById('dupEventBtn').style.display = 'none';
-    document.getElementById('evDate').value = activeDateKey || dateKey(new Date());
-    document.getElementById('evEndDate').value = activeDateKey || dateKey(new Date());
-    document.getElementById('evColor').value = '#6366f1';
-    document.getElementById('colorPreview').style.background = '#6366f1';
-    document.getElementById('colorHex').textContent = '#6366f1';
-    document.getElementById('guestChips').innerHTML = '';
-    document.getElementById('budgetDisplay').style.display = 'none';
-    document.getElementById('recurUntilRow').style.display = 'none';
-    document.getElementById('timeRow').style.display = 'grid';
-    renderGuests();
+    if (confirm('Clear form?')) {
+      document.getElementById('eventForm').reset();
+      editingId = null; guestList = [];
+      document.getElementById('modalTitle').textContent = 'New Event';
+      document.getElementById('dupEventBtn').style.display = 'none';
+      document.getElementById('saveAsNewBtn').style.display = 'none';
+      document.getElementById('evDate').value = activeDateKey || dateKey(new Date());
+      document.getElementById('evEndDate').value = activeDateKey || dateKey(new Date());
+      document.getElementById('evColor').value = '#6366f1';
+      document.getElementById('colorPreview').style.background = '#6366f1';
+      document.getElementById('colorHex').textContent = '#6366f1';
+      document.getElementById('guestChips').innerHTML = '';
+      document.getElementById('budgetDisplay').style.display = 'none';
+      document.getElementById('recurUntilRow').style.display = 'none';
+      document.getElementById('timeRow').style.display = 'grid';
+      renderGuests();
+    }
+  });
+
+  document.getElementById('saveAsNewBtn').addEventListener('click', () => {
+    editingId = null;
+    document.getElementById('saveBtn').click();
   });
 
   // Modal tabs
