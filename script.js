@@ -33,52 +33,120 @@ let draggedId     = null;
 let guestList     = [];
 
 // ────────────────────────────────────────────────────────────────
-// 3. STORAGE  (load · save · migrate)
+// 3. FIREBASE & STORAGE
 // ────────────────────────────────────────────────────────────────
-function loadEvents() {
+const firebaseConfig = {
+  apiKey: "AIzaSyCYStvpM4WGuQPmIl2lef91Ukz-f3bpjxk",
+  authDomain: "omnia-400aa.firebaseapp.com",
+  projectId: "omnia-400aa",
+  storageBucket: "omnia-400aa.firebasestorage.app",
+  messagingSenderId: "951110501992",
+  appId: "1:951110501992:web:cc21f7c0c1c9cd407d5ddd",
+  measurementId: "G-FS0LCWX1WN"
+};
+firebase.initializeApp(firebaseConfig);
+const db = firebase.firestore();
+const auth = firebase.auth();
+
+let currentUser = null;
+let unsubscribeEvents = null;
+
+function loadEventsLocally() {
   try {
-    // Migrate from old storage key
     const raw = localStorage.getItem(OLD_KEY);
     if (raw) {
       const old = JSON.parse(raw);
       const migrated = old.map(e => buildEvent({
-        title:     e.title,
-        date:      e.date,
-        endDate:   e.date,
-        time:      e.time    || '09:00',
-        endTime:   e.time    || '10:00',
-        venue:     e.venue   || '',
-        organizer: e.organizer || '',
-        category:  e.category || 'Other',
-        color:     CAT_COLORS[e.category] || '#6366f1',
-        priority:  e.priority || 'Medium',
-        notes:     e.notes   || '',
+        ...e,
+        time: e.time || '09:00',
+        endTime: e.time || '10:00',
+        category: e.category || 'Other',
+        color: CAT_COLORS[e.category] || '#6366f1',
+        priority: e.priority || 'Medium',
       }));
       localStorage.removeItem(OLD_KEY);
       localStorage.setItem(STORAGE_KEY, JSON.stringify(migrated));
       return migrated;
     }
-
     const stored = localStorage.getItem(STORAGE_KEY);
     if (stored) return JSON.parse(stored);
-
-    // First-time user: seed sample events
     const samples = buildSampleEvents();
     localStorage.setItem(STORAGE_KEY, JSON.stringify(samples));
     return samples;
   } catch (err) {
-    console.error('[OMINIA] Storage load error:', err);
     return [];
   }
 }
 
-function saveEvents() {
+function saveEventsLocally() {
   try {
     localStorage.setItem(STORAGE_KEY, JSON.stringify(events));
   } catch (err) {
-    console.error('[OMINIA] Storage save error:', err);
-    showToast('Storage limit reached — free some space.', 'error');
+    showToast('Storage limit reached.', 'error');
   }
+}
+
+async function syncLocalToCloud(user) {
+  const local = JSON.parse(localStorage.getItem(STORAGE_KEY) || '[]');
+  if (local.length > 0) {
+    const batch = db.batch();
+    local.forEach(ev => {
+      const docRef = db.collection('users').doc(user.uid).collection('events').doc(ev.id);
+      batch.set(docRef, ev);
+    });
+    try {
+      await batch.commit();
+      localStorage.removeItem(STORAGE_KEY);
+    } catch(e) { console.error('Sync failed', e); }
+  }
+}
+
+function setupAuth() {
+  const authBtn = document.getElementById('authBtn');
+  const authOverlay = document.getElementById('authOverlay');
+  
+  auth.onAuthStateChanged(user => {
+    if (user) {
+      currentUser = user;
+      authBtn.textContent = 'Sign Out';
+      authOverlay.classList.add('hidden');
+      
+      syncLocalToCloud(user).then(() => {
+        if (unsubscribeEvents) unsubscribeEvents();
+        unsubscribeEvents = db.collection('users').doc(user.uid).collection('events')
+          .onSnapshot(snapshot => {
+            events = snapshot.docs.map(doc => doc.data());
+            events.forEach(scheduleReminder);
+            renderAll();
+          }, err => console.error("Listen error:", err));
+      });
+    } else {
+      currentUser = null;
+      authBtn.textContent = 'Sign In';
+      if (unsubscribeEvents) unsubscribeEvents();
+      
+      events = loadEventsLocally();
+      events.forEach(scheduleReminder);
+      renderAll();
+    }
+  });
+
+  authBtn.addEventListener('click', () => {
+    if (currentUser) {
+      auth.signOut();
+    } else {
+      authOverlay.classList.remove('hidden');
+    }
+  });
+
+  document.getElementById('googleSignInBtn').addEventListener('click', () => {
+    const provider = new firebase.auth.GoogleAuthProvider();
+    auth.signInWithPopup(provider).catch(err => showToast(err.message, 'error'));
+  });
+
+  document.getElementById('authCloseBtn').addEventListener('click', () => {
+    authOverlay.classList.add('hidden');
+  });
 }
 
 function buildSampleEvents() {
@@ -930,7 +998,13 @@ function switchTab(tab) {
 function addEvent(payload) {
   const ev = buildEvent(payload);
   events.push(ev);
-  saveEvents();
+  
+  if (currentUser) {
+    db.collection('users').doc(currentUser.uid).collection('events').doc(ev.id).set(ev);
+  } else {
+    saveEventsLocally();
+  }
+  
   scheduleReminder(ev);
   renderAll();
   showToast(`✅ "${ev.title}" saved!`, 'success');
@@ -941,7 +1015,13 @@ function editEvent(id, payload) {
   const i = events.findIndex(e => e.id === id);
   if (i === -1) return;
   events[i] = { ...events[i], ...payload, updatedAt: new Date().toISOString() };
-  saveEvents();
+  
+  if (currentUser) {
+    db.collection('users').doc(currentUser.uid).collection('events').doc(id).update(events[i]);
+  } else {
+    saveEventsLocally();
+  }
+  
   scheduleReminder(events[i]);
   renderAll();
   showToast(`✏️ "${events[i].title}" updated!`, 'success');
@@ -950,7 +1030,13 @@ function editEvent(id, payload) {
 function delEvent(id) {
   const ev = events.find(e => e.id === id);
   events = events.filter(e => e.id !== id);
-  saveEvents();
+  
+  if (currentUser) {
+    db.collection('users').doc(currentUser.uid).collection('events').doc(id).delete();
+  } else {
+    saveEventsLocally();
+  }
+  
   renderAll();
   if (activeDateKey) renderDayPanel(activeDateKey);
   showToast(`🗑️ "${ev?.title || 'Event'}" deleted.`, 'info');
@@ -961,7 +1047,13 @@ function dupEvent(id) {
   if (!ev) return;
   const copy = buildEvent({ ...ev, title: `${ev.title} (Copy)`, createdAt: undefined });
   events.push(copy);
-  saveEvents();
+  
+  if (currentUser) {
+    db.collection('users').doc(currentUser.uid).collection('events').doc(copy.id).set(copy);
+  } else {
+    saveEventsLocally();
+  }
+  
   renderAll();
   if (activeDateKey) renderDayPanel(activeDateKey);
   showToast('📋 Event duplicated!', 'success');
@@ -1294,17 +1386,60 @@ function initListeners() {
   document.getElementById('evBudget').addEventListener('input', updateBudgetDisplay);
   document.getElementById('evCurrency').addEventListener('change', updateBudgetDisplay);
 
-  // Guest input (Enter or comma)
-  document.getElementById('evGuestInput').addEventListener('keydown', function(e) {
+  // Date change sync
+  document.getElementById('evDate').addEventListener('change', function(e) {
+    const newDate = e.target.value;
+    if (newDate) {
+      const endDateInput = document.getElementById('evEndDate');
+      if (endDateInput.value < newDate) {
+        endDateInput.value = newDate;
+      }
+      renderDayPanel(newDate);
+    }
+  });
+
+  document.getElementById('evEndDate').addEventListener('change', function(e) {
+    const newEndDate = e.target.value;
+    const startDate = document.getElementById('evDate').value;
+    if (newEndDate && startDate && newEndDate < startDate) {
+      this.value = startDate;
+      showToast('End date cannot be before start date.', 'warn');
+    }
+  });
+
+  // Category color sync
+  document.getElementById('evCategory').addEventListener('change', function(e) {
+    const color = CAT_COLORS[e.target.value] || '#6366f1';
+    document.getElementById('evColor').value = color;
+    document.getElementById('colorPreview').style.background = color;
+    document.getElementById('colorHex').textContent = color;
+  });
+
+  // Guest input handling
+  const guestInput = document.getElementById('evGuestInput');
+  const addGuest = () => {
+    const email = guestInput.value.trim().replace(/,$/, '');
+    if (email && !guestList.includes(email)) {
+      guestList.push(email);
+      renderGuests();
+    }
+    guestInput.value = '';
+  };
+
+  guestInput.addEventListener('keydown', function(e) {
     if (e.key === 'Enter' || e.key === ',') {
       e.preventDefault();
-      const email = this.value.trim().replace(/,$/, '');
-      if (email && !guestList.includes(email)) {
-        guestList.push(email);
-        renderGuests();
-      }
-      this.value = '';
+      addGuest();
     }
+  });
+  guestInput.addEventListener('input', function(e) {
+    if (this.value.includes(',')) {
+      this.value = this.value.replace(/,/g, '');
+      addGuest();
+    }
+  });
+  guestInput.addEventListener('blur', function() {
+    if (this.value.trim()) addGuest();
   });
 
   // Search
@@ -1369,15 +1504,9 @@ function init() {
   tzEl.textContent = localTZOffset();
   tzEl.title = `Timezone: ${localTZ()}`;
 
-  // Load events
-  events = loadEvents();
-
-  // Schedule reminders for existing events
-  events.forEach(scheduleReminder);
-
-  // Initial render
+  // Setup Auth (This handles loading events and initial render via onAuthStateChanged)
+  setupAuth();
   updateTitle();
-  renderAll();
 
   // Wire up all event listeners
   initListeners();
